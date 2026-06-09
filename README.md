@@ -19,13 +19,13 @@ Summarizer Agent ──► condenses raw results
 Writer Agent ──► final markdown report
 ```
 
-The flow is orchestrated by **LangGraph** via a shared-state graph. The Supervisor uses _conditional edges_ to decide which agent to activate based on the current state.
+The flow is orchestrated by **LangGraph** via a shared-state graph with fixed edges: Supervisor → Researcher → Summarizer → Writer.
 
 ## Agents
 
 | Agent | Role |
 |---|---|
-| **Supervisor** | Refines the query and routes between agents |
+| **Supervisor** | Refines the query before passing it to the pipeline |
 | **Researcher** | Generates search queries and fetches results via DuckDuckGo |
 | **Summarizer** | Condenses raw results into a structured summary |
 | **Writer** | Produces a professional final report in markdown |
