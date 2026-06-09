@@ -9,4 +9,3 @@ class ResearchState(TypedDict):
     search_results: List[str]
     summary: str
     final_report: str
-    next: str

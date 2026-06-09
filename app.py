@@ -58,7 +58,6 @@ if run_button and query:
         "search_results": [],
         "summary": "",
         "final_report": "",
-        "next": "",
     }
 
     col1, col2 = st.columns([1, 2])
@@ -77,14 +76,19 @@ if run_button and query:
         report_placeholder = st.empty()
 
     try:
-        status_supervisor.update(state="complete")
-        status_researcher.update(state="running")
+        status_supervisor.update(state="running")
+        final_state = None
 
         for step in graph.stream(initial_state):
             node_name = list(step.keys())[0]
             node_state = step[node_name]
+            final_state = node_state
 
-            if node_name == "researcher":
+            if node_name == "supervisor":
+                status_supervisor.update(state="complete")
+                status_researcher.update(state="running")
+
+            elif node_name == "researcher":
                 results = node_state.get("search_results", [])
                 with search_expander:
                     for i, r in enumerate(results, 1):
@@ -108,8 +112,7 @@ if run_button and query:
 
         st.success("Research complete!")
 
-        final_state = node_state
-        if final_state.get("final_report"):
+        if final_state and final_state.get("final_report"):
             st.download_button(
                 label="📥 Download report",
                 data=final_state["final_report"],

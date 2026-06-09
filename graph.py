@@ -8,10 +8,6 @@ from agents.writer import writer_node
 from config import AgentModels, DEFAULT_MODELS
 
 
-def route(state: ResearchState) -> str:
-    return state.get("next", "END")
-
-
 def build_graph(models: AgentModels = DEFAULT_MODELS) -> StateGraph:
     graph = StateGraph(ResearchState)
 
@@ -22,17 +18,7 @@ def build_graph(models: AgentModels = DEFAULT_MODELS) -> StateGraph:
 
     graph.set_entry_point("supervisor")
 
-    graph.add_conditional_edges(
-        "supervisor",
-        route,
-        {
-            "researcher": "researcher",
-            "summarizer": "summarizer",
-            "writer": "writer",
-            "END": END,
-        },
-    )
-
+    graph.add_edge("supervisor", "researcher")
     graph.add_edge("researcher", "summarizer")
     graph.add_edge("summarizer", "writer")
     graph.add_edge("writer", END)

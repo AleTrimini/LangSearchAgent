@@ -12,17 +12,8 @@ Always preserve the original language of the query — never translate it.
 If the query is already clear and specific, return it unchanged."""
 
 
-def supervisor_node(state: ResearchState, models: AgentModels = DEFAULT_MODELS) -> ResearchState:
+def supervisor_node(state: ResearchState, models: AgentModels = DEFAULT_MODELS) -> dict:
     llm = ChatOpenAI(model=models.supervisor, temperature=0)
-
-    if not state.get("search_results"):
-        next_agent = "researcher"
-    elif not state.get("summary"):
-        next_agent = "summarizer"
-    elif not state.get("final_report"):
-        next_agent = "writer"
-    else:
-        next_agent = "END"
 
     messages = [
         SystemMessage(content=SYSTEM_PROMPT),
@@ -32,8 +23,4 @@ def supervisor_node(state: ResearchState, models: AgentModels = DEFAULT_MODELS) 
     response = llm.invoke(messages)
     refined_query = response.content.strip()
 
-    return {
-        **state,
-        "query": refined_query,
-        "next": next_agent,
-    }
+    return {"query": refined_query}

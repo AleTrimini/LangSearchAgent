@@ -3,7 +3,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, call
 from langchain_core.messages import AIMessage
 
 import pytest
@@ -31,7 +31,6 @@ def base_state(**kwargs) -> ResearchState:
         "search_results": [],
         "summary": "",
         "final_report": "",
-        "next": "",
     }
     return {**defaults, **kwargs}
 
@@ -39,58 +38,39 @@ def base_state(**kwargs) -> ResearchState:
 # --- Supervisor ---
 
 class TestSupervisorNode:
-    def test_routes_to_researcher_when_no_results(self):
-        with patch("agents.supervisor.ChatOpenAI") as mock_llm_cls:
-            mock_llm_cls.return_value.invoke.return_value = make_ai_message(
-                "Latest AI developments in 2025"
-            )
-            result = supervisor_node(base_state())
-        assert result["next"] == "researcher"
-
-    def test_routes_to_summarizer_when_results_present(self):
-        with patch("agents.supervisor.ChatOpenAI") as mock_llm_cls:
-            mock_llm_cls.return_value.invoke.return_value = make_ai_message(
-                "Latest AI developments in 2025"
-            )
-            result = supervisor_node(base_state(search_results=[MOCK_SEARCH_RESULT]))
-        assert result["next"] == "summarizer"
-
-    def test_routes_to_writer_when_summary_present(self):
-        with patch("agents.supervisor.ChatOpenAI") as mock_llm_cls:
-            mock_llm_cls.return_value.invoke.return_value = make_ai_message(
-                "Latest AI developments in 2025"
-            )
-            result = supervisor_node(
-                base_state(search_results=[MOCK_SEARCH_RESULT], summary="A summary.")
-            )
-        assert result["next"] == "writer"
-
-    def test_routes_to_end_when_report_present(self):
-        with patch("agents.supervisor.ChatOpenAI") as mock_llm_cls:
-            mock_llm_cls.return_value.invoke.return_value = make_ai_message(
-                "Latest AI developments in 2025"
-            )
-            result = supervisor_node(
-                base_state(
-                    search_results=[MOCK_SEARCH_RESULT],
-                    summary="A summary.",
-                    final_report="A report.",
-                )
-            )
-        assert result["next"] == "END"
-
-    def test_refines_query_from_llm_response(self):
+    def test_refines_query_using_llm(self):
         refined = "Latest advances in artificial intelligence and machine learning 2025"
         with patch("agents.supervisor.ChatOpenAI") as mock_llm_cls:
             mock_llm_cls.return_value.invoke.return_value = make_ai_message(refined)
             result = supervisor_node(base_state())
         assert result["query"] == refined
 
+    def test_strips_whitespace_from_llm_response(self):
+        with patch("agents.supervisor.ChatOpenAI") as mock_llm_cls:
+            mock_llm_cls.return_value.invoke.return_value = make_ai_message("  refined query  \n")
+            result = supervisor_node(base_state())
+        assert result["query"] == "refined query"
+
+    def test_sends_original_query_to_llm(self):
+        with patch("agents.supervisor.ChatOpenAI") as mock_llm_cls:
+            mock_llm_cls.return_value.invoke.return_value = make_ai_message("refined")
+            supervisor_node(base_state(query="my original query"))
+        invoke_args = mock_llm_cls.return_value.invoke.call_args[0][0]
+        human_message = invoke_args[-1]
+        assert "my original query" in human_message.content
+
+    def test_uses_configured_model(self):
+        from config import AgentModels
+        with patch("agents.supervisor.ChatOpenAI") as mock_llm_cls:
+            mock_llm_cls.return_value.invoke.return_value = make_ai_message("q")
+            supervisor_node(base_state(), models=AgentModels(supervisor="gpt-4o-mini"))
+        mock_llm_cls.assert_called_once_with(model="gpt-4o-mini", temperature=0)
+
 
 # --- Researcher ---
 
 class TestResearcherNode:
-    def test_populates_search_results(self):
+    def test_uses_tool_calls_from_llm(self):
         mock_response = MagicMock()
         mock_response.tool_calls = [
             {"name": "web_search", "args": {"query": "AI 2025"}}
@@ -103,9 +83,8 @@ class TestResearcherNode:
             mock_search.invoke.return_value = MOCK_SEARCH_RESULT
             result = researcher_node(base_state())
 
-        assert len(result["search_results"]) == 1
-        assert result["search_results"][0] == MOCK_SEARCH_RESULT
-        assert result["next"] == "summarizer"
+        mock_search.invoke.assert_called_once_with({"query": "AI 2025"})
+        assert result["search_results"] == [MOCK_SEARCH_RESULT]
 
     def test_falls_back_to_direct_search_when_no_tool_calls(self):
         mock_response = MagicMock()
@@ -116,33 +95,103 @@ class TestResearcherNode:
              patch("agents.researcher.web_search") as mock_search:
             mock_llm_cls.return_value.bind_tools.return_value.invoke.return_value = mock_response
             mock_search.invoke.return_value = MOCK_SEARCH_RESULT
+            result = researcher_node(base_state(query="fallback query"))
+
+        mock_search.invoke.assert_called_once_with({"query": "fallback query"})
+        assert result["search_results"] == [MOCK_SEARCH_RESULT]
+
+    def test_multiple_tool_calls_produce_multiple_results(self):
+        mock_response = MagicMock()
+        mock_response.tool_calls = [
+            {"name": "web_search", "args": {"query": "query A"}},
+            {"name": "web_search", "args": {"query": "query B"}},
+        ]
+        mock_response.content = ""
+
+        with patch("agents.researcher.ChatOpenAI") as mock_llm_cls, \
+             patch("agents.researcher.web_search") as mock_search:
+            mock_llm_cls.return_value.bind_tools.return_value.invoke.return_value = mock_response
+            mock_search.invoke.side_effect = ["result A", "result B"]
             result = researcher_node(base_state())
 
-        assert result["search_results"] == [MOCK_SEARCH_RESULT]
+        assert result["search_results"] == ["result A", "result B"]
+
+    def test_llm_response_added_to_messages(self):
+        mock_response = MagicMock()
+        mock_response.tool_calls = []
+        mock_response.content = ""
+
+        with patch("agents.researcher.ChatOpenAI") as mock_llm_cls, \
+             patch("agents.researcher.web_search") as mock_search:
+            mock_llm_cls.return_value.bind_tools.return_value.invoke.return_value = mock_response
+            mock_search.invoke.return_value = MOCK_SEARCH_RESULT
+            result = researcher_node(base_state())
+
+        assert mock_response in result["messages"]
 
 
 # --- Summarizer ---
 
 class TestSummarizerNode:
-    def test_produces_summary(self):
+    def test_produces_summary_from_search_results(self):
         with patch("agents.summarizer.ChatOpenAI") as mock_llm_cls:
-            mock_llm_cls.return_value.invoke.return_value = make_ai_message("Key findings: ...")
+            mock_llm_cls.return_value.invoke.return_value = make_ai_message("Key findings: AI is booming.")
             result = summarizer_node(base_state(search_results=[MOCK_SEARCH_RESULT]))
 
-        assert result["summary"] == "Key findings: ..."
-        assert result["next"] == "writer"
+        assert result["summary"] == "Key findings: AI is booming."
+
+    def test_includes_query_and_results_in_prompt(self):
+        with patch("agents.summarizer.ChatOpenAI") as mock_llm_cls:
+            mock_llm_cls.return_value.invoke.return_value = make_ai_message("summary")
+            summarizer_node(base_state(
+                query="test query",
+                search_results=["result one", "result two"],
+            ))
+
+        invoke_args = mock_llm_cls.return_value.invoke.call_args[0][0]
+        human_message = invoke_args[-1]
+        assert "test query" in human_message.content
+        assert "result one" in human_message.content
+        assert "result two" in human_message.content
+
+    def test_multiple_results_are_joined(self):
+        with patch("agents.summarizer.ChatOpenAI") as mock_llm_cls:
+            mock_llm_cls.return_value.invoke.return_value = make_ai_message("summary")
+            summarizer_node(base_state(search_results=["r1", "r2", "r3"]))
+
+        invoke_args = mock_llm_cls.return_value.invoke.call_args[0][0]
+        assert "r1" in invoke_args[-1].content
+        assert "r2" in invoke_args[-1].content
+        assert "r3" in invoke_args[-1].content
 
 
 # --- Writer ---
 
 class TestWriterNode:
-    def test_produces_final_report(self):
+    def test_produces_final_report_from_summary(self):
         with patch("agents.writer.ChatOpenAI") as mock_llm_cls:
-            mock_llm_cls.return_value.invoke.return_value = make_ai_message("## Report\n...")
+            mock_llm_cls.return_value.invoke.return_value = make_ai_message("## Report\nDetailed findings.")
             result = writer_node(base_state(summary="A summary."))
 
-        assert result["final_report"] == "## Report\n..."
-        assert result["next"] == "END"
+        assert result["final_report"] == "## Report\nDetailed findings."
+
+    def test_includes_query_and_summary_in_prompt(self):
+        with patch("agents.writer.ChatOpenAI") as mock_llm_cls:
+            mock_llm_cls.return_value.invoke.return_value = make_ai_message("report")
+            writer_node(base_state(query="my topic", summary="my summary"))
+
+        invoke_args = mock_llm_cls.return_value.invoke.call_args[0][0]
+        human_message = invoke_args[-1]
+        assert "my topic" in human_message.content
+        assert "my summary" in human_message.content
+
+    def test_uses_nonzero_temperature_for_creativity(self):
+        from config import AgentModels
+        with patch("agents.writer.ChatOpenAI") as mock_llm_cls:
+            mock_llm_cls.return_value.invoke.return_value = make_ai_message("report")
+            writer_node(base_state(summary="s"), models=AgentModels())
+        _, kwargs = mock_llm_cls.call_args
+        assert kwargs.get("temperature", 0) > 0
 
 
 # --- Full graph (end-to-end) ---
@@ -153,8 +202,7 @@ class TestGraph:
         summary_response = make_ai_message("Summary of AI findings.")
         report_response = make_ai_message("## Final Report\nAI is advancing rapidly.")
 
-        mock_researcher_response = AIMessage(content="")
-        mock_researcher_response.tool_calls = []
+        researcher_response = AIMessage(content="", tool_calls=[])
 
         with patch("agents.supervisor.ChatOpenAI") as sup_llm, \
              patch("agents.researcher.ChatOpenAI") as res_llm, \
@@ -163,7 +211,7 @@ class TestGraph:
              patch("agents.writer.ChatOpenAI") as wri_llm:
 
             sup_llm.return_value.invoke.return_value = supervisor_response
-            res_llm.return_value.bind_tools.return_value.invoke.return_value = mock_researcher_response
+            res_llm.return_value.bind_tools.return_value.invoke.return_value = researcher_response
             mock_search.invoke.return_value = MOCK_SEARCH_RESULT
             sum_llm.return_value.invoke.return_value = summary_response
             wri_llm.return_value.invoke.return_value = report_response
@@ -174,3 +222,26 @@ class TestGraph:
         assert result["final_report"] == "## Final Report\nAI is advancing rapidly."
         assert result["summary"] == "Summary of AI findings."
         assert len(result["search_results"]) == 1
+
+    def test_supervisor_refined_query_propagates_to_downstream_agents(self):
+        refined = "Refined: quantum computing breakthroughs 2025"
+        researcher_response = AIMessage(content="", tool_calls=[])
+
+        with patch("agents.supervisor.ChatOpenAI") as sup_llm, \
+             patch("agents.researcher.ChatOpenAI") as res_llm, \
+             patch("agents.researcher.web_search") as mock_search, \
+             patch("agents.summarizer.ChatOpenAI") as sum_llm, \
+             patch("agents.writer.ChatOpenAI") as wri_llm:
+
+            sup_llm.return_value.invoke.return_value = make_ai_message(refined)
+            res_llm.return_value.bind_tools.return_value.invoke.return_value = researcher_response
+            mock_search.invoke.return_value = MOCK_SEARCH_RESULT
+            sum_llm.return_value.invoke.return_value = make_ai_message("Summary.")
+            wri_llm.return_value.invoke.return_value = make_ai_message("Report.")
+
+            graph = build_graph()
+            result = graph.invoke(base_state(query="quantum computing"))
+
+        assert result["query"] == refined
+        sum_invoke_args = sum_llm.return_value.invoke.call_args[0][0]
+        assert refined in sum_invoke_args[-1].content

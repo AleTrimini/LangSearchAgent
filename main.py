@@ -15,7 +15,6 @@ def run_research(query: str) -> dict:
         "search_results": [],
         "summary": "",
         "final_report": "",
-        "next": "",
     }
 
     print(f"\n{'='*60}")
@@ -36,4 +35,3 @@ if __name__ == "__main__":
         query = "What are the latest developments in quantum computing in 2025?"
 
     run_research(query)
-#ssss

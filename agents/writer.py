@@ -28,8 +28,6 @@ def writer_node(state: ResearchState, models: AgentModels = DEFAULT_MODELS) -> R
     response = llm.invoke(messages)
 
     return {
-        **state,
         "final_report": response.content,
-        "messages": state["messages"] + [response],
-        "next": "END",
+        "messages": [response],
     }

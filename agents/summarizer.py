@@ -25,8 +25,6 @@ def summarizer_node(state: ResearchState, models: AgentModels = DEFAULT_MODELS) 
     response = llm.invoke(messages)
 
     return {
-        **state,
         "summary": response.content,
-        "messages": state["messages"] + [response],
-        "next": "writer",
+        "messages": [response],
     }

@@ -33,8 +33,6 @@ def researcher_node(state: ResearchState, models: AgentModels = DEFAULT_MODELS) 
         search_results.append(fallback)
 
     return {
-        **state,
         "search_results": search_results,
-        "messages": state["messages"] + [response],
-        "next": "summarizer",
+        "messages": [response],
     }
